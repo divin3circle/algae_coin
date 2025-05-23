@@ -1,0 +1,10 @@
+We want to build an Algae tokenization project, to try an simulate how we can tokenize this field on Hedera and leverage their HTS service.
+
+1. Create an Algae token - Algae
+2. Create a simulated Kenyan Shillings token - KSHC. To simulate a pool to swap the Algae token for the KSHC token and vice versa.
+3. Create a pool of ALGAE/KSHC token pair using saucerswap
+4. Create an example of a user with an Hedera account with a token balance of 1000 KSHC
+5. The user will then swap the 1000 KSHC for Algae tokens
+6. Simulate the Algae org using the Swap KSHC to invest in other projects that return profits in KSHC which is then put back in the pool as liquidity to boost ALGAE token price, hence the user gains money.
+7. Simulate a loss scenario where the Algae org invests in a project that loses money, hence the Algae token price decreases. Since no KSHC comes back to the pool 
+
