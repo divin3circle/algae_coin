@@ -12,6 +12,7 @@ import {
   AccountCreateTransaction,
   TransferTransaction,
 } from "@hashgraph/sdk";
+import { swapAlgaeToKsh } from "../scripts/swapTokens.js";
 
 const ALGAE_TOKEN_ID = process.env.ALGAE_TOKEN_ID;
 const KSH_TOKEN_ID = process.env.KSH_TOKEN_ID;
@@ -175,6 +176,32 @@ app.post("/buy/KSH", async (req, res) => {
     res.send({ statusTxn });
   } catch (error) {
     console.error("Error buying KSH:", error);
+    res.status(500).send(error);
+  }
+});
+app.post("/swap/ALGAE/KSH", async (req, res) => {
+  try {
+    const { amount, username } = req.body;
+    const { data: user, error } = await supabase
+      .from("users")
+      .select()
+      .eq("user_name", username);
+    if (error) {
+      return res.status(500).send(error);
+    }
+    if (!user) {
+      return res.status(404).send("User not found");
+    }
+    const userFound = user[0];
+    const accountId = userFound.account_id;
+    const statusTxn = await swapAlgaeToKsh(
+      accountId,
+      userFound.private_key,
+      amount
+    );
+    res.send({ statusTxn });
+  } catch (error) {
+    console.error("Error swapping ALGAE to KSH:", error);
     res.status(500).send(error);
   }
 });
