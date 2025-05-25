@@ -1,37 +1,37 @@
-// Unified swap module for ALGAE <-> KSH token swaps
+// Unified swap module for ALGAE <-> KSH token swaps with REAL token transfers
 import swapAlgaeForKsh from "./swapAlgaeKsh.js";
 import swapKshForAlgae from "./swapKshAlgae.js";
 
 /**
- * Swap ALGAE tokens for KSH tokens
+ * Swap ALGAE tokens for KSH tokens (REAL TRANSFER)
  * @param {string} userAccountId - User's Hedera account ID (e.g., "0.0.1234567")
  * @param {string} userPrivateKey - User's private key in DER format
  * @param {number} amount - Amount of ALGAE tokens to swap
- * @returns {Promise<Object>} Swap result with inputAmount, outputAmount, transactionId, success
+ * @returns {Promise<Object>} Swap result with inputAmount, outputAmount, transactionId, success, exchangeRate, poolBalances
  */
 export async function swapAlgaeToKsh(userAccountId, userPrivateKey, amount) {
   return await swapAlgaeForKsh(userAccountId, userPrivateKey, amount);
 }
 
 /**
- * Swap KSH tokens for ALGAE tokens
+ * Swap KSH tokens for ALGAE tokens (REAL TRANSFER)
  * @param {string} userAccountId - User's Hedera account ID (e.g., "0.0.1234567")
  * @param {string} userPrivateKey - User's private key in DER format
  * @param {number} amount - Amount of KSH tokens to swap
- * @returns {Promise<Object>} Swap result with inputAmount, outputAmount, transactionId, success
+ * @returns {Promise<Object>} Swap result with inputAmount, outputAmount, transactionId, success, exchangeRate, poolBalances
  */
 export async function swapKshToAlgae(userAccountId, userPrivateKey, amount) {
   return await swapKshForAlgae(userAccountId, userPrivateKey, amount);
 }
 
 /**
- * Generic swap function that can handle both directions
+ * Generic swap function that can handle both directions (REAL TRANSFER)
  * @param {string} fromToken - Either "ALGAE" or "KSH"
  * @param {string} toToken - Either "ALGAE" or "KSH"
  * @param {string} userAccountId - User's Hedera account ID
  * @param {string} userPrivateKey - User's private key in DER format
  * @param {number} amount - Amount of tokens to swap
- * @returns {Promise<Object>} Swap result
+ * @returns {Promise<Object>} Swap result with real token transfers
  */
 export async function swapTokens(
   fromToken,

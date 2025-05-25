@@ -1,19 +1,41 @@
-# ALGAE ↔ KSH Token Swap Functions
+# ALGAE ↔ KSH Token Swap Functions - REAL TRANSFERS
 
-This documentation covers the exportable swap functions for exchanging ALGAE and KSH tokens on the Hedera network.
+This documentation covers the exportable swap functions for exchanging ALGAE and KSH tokens on the Hedera network with **REAL TOKEN TRANSFERS** using your main account as a liquidity pool.
+
+## 🚨 IMPORTANT - REAL TRANSFERS
+
+⚠️ **These functions perform ACTUAL token transfers that will show up on HashScan!**
+
+The swap system works as follows:
+
+1. **User sends their tokens to the main account (pool)**
+2. **System calculates exchange rate based on current pool reserves**
+3. **Main account sends appropriate tokens back to user**
+4. **All transfers are visible on HashScan blockchain explorer**
 
 ## 📁 File Structure
 
 ```
 scripts/
-├── swapAlgaeKsh.js       # ALGAE → KSH swap implementation
-├── swapKshAlgae.js       # KSH → ALGAE swap implementation
+├── swapAlgaeKsh.js       # ALGAE → KSH real swap implementation
+├── swapKshAlgae.js       # KSH → ALGAE real swap implementation
 ├── swapTokens.js         # Unified swap module (recommended)
-└── testSwaps.js          # Test file for all swap functions
+├── testSwaps.js          # Test file for simulation functions
+└── testRealSwaps.js      # Test file for REAL swap functions
 
 examples/
 └── swapUsageExample.js   # Comprehensive usage examples
 ```
+
+## 🏦 Liquidity Pool System
+
+Your main account (from `.env` file) acts as the liquidity pool:
+
+- **Pool Account**: `process.env.ACCOUNT_ID`
+- **Starting Liquidity**: ~500 million ALGAE and KSH tokens each
+- **Exchange Rate**: Calculated using constant product formula (`x * y = k`)
+- **Fee**: 0.3% deducted from input amount
+- **Real-time**: Pool balances change with each swap
 
 ## 🚀 Quick Start
 
@@ -35,20 +57,20 @@ import swapAlgaeForKsh from "./scripts/swapAlgaeKsh.js";
 import swapKshForAlgae from "./scripts/swapKshAlgae.js";
 ```
 
-### Basic Usage
+### Basic Usage (REAL TRANSFERS)
 
 ```javascript
 // User credentials
 const userAccountId = "0.0.1234567";
 const userPrivateKey = "302e020100300506032b65700422042...";
 
-// Swap 100 ALGAE for KSH
+// Swap 100 ALGAE for KSH (REAL TRANSFER)
 const result1 = await swapAlgaeToKsh(userAccountId, userPrivateKey, 100);
 
-// Swap 50 KSH for ALGAE
+// Swap 50 KSH for ALGAE (REAL TRANSFER)
 const result2 = await swapKshToAlgae(userAccountId, userPrivateKey, 50);
 
-// Generic swap (auto-detects direction)
+// Generic swap (auto-detects direction, REAL TRANSFER)
 const result3 = await swapTokens(
   "ALGAE",
   "KSH",
@@ -62,7 +84,7 @@ const result3 = await swapTokens(
 
 ### `swapAlgaeToKsh(userAccountId, userPrivateKey, amount)`
 
-Swaps ALGAE tokens for KSH tokens.
+Swaps ALGAE tokens for KSH tokens with **REAL TOKEN TRANSFERS**.
 
 **Parameters:**
 
@@ -80,14 +102,19 @@ console.log(result);
 // {
 //   inputAmount: "100",
 //   outputAmount: "99",
-//   transactionId: "real-swap-1748164484284",
-//   success: true
+//   transactionId: "algae-ksh-swap-1748164484284",
+//   success: true,
+//   exchangeRate: "0.996703",
+//   poolBalances: {
+//     algae: 1000000100,
+//     ksh: 999999901
+//   }
 // }
 ```
 
 ### `swapKshToAlgae(userAccountId, userPrivateKey, amount)`
 
-Swaps KSH tokens for ALGAE tokens.
+Swaps KSH tokens for ALGAE tokens with **REAL TOKEN TRANSFERS**.
 
 **Parameters:**
 
@@ -105,7 +132,7 @@ const result = await swapKshToAlgae("0.0.1234567", privateKey, 50);
 
 ### `swapTokens(fromToken, toToken, userAccountId, userPrivateKey, amount)`
 
-Generic swap function that handles both directions.
+Generic swap function that handles both directions with **REAL TOKEN TRANSFERS**.
 
 **Parameters:**
 
@@ -134,7 +161,12 @@ All swap functions return a `SwapResult` object:
   inputAmount: string,      // Amount of tokens sent
   outputAmount: string,     // Amount of tokens received
   transactionId: string,    // Unique transaction identifier
-  success: boolean          // Whether the swap succeeded
+  success: boolean,         // Whether the swap succeeded
+  exchangeRate: string,     // Actual exchange rate used
+  poolBalances: {           // Pool balances after swap
+    algae: number,
+    ksh: number
+  }
 }
 ```
 
@@ -147,206 +179,146 @@ On error:
 }
 ```
 
-## 🔧 Integration Examples
+## 🧮 Exchange Rate Calculation
 
-### Express.js API Route
+The system uses the **Constant Product Formula** (like Uniswap):
 
-```javascript
-import { swapTokens } from "./scripts/swapTokens.js";
-
-app.post("/api/swap", async (req, res) => {
-  const { userAccountId, userPrivateKey, fromToken, toToken, amount } =
-    req.body;
-
-  try {
-    const result = await swapTokens(
-      fromToken,
-      toToken,
-      userAccountId,
-      userPrivateKey,
-      amount
-    );
-
-    if (result.success) {
-      res.json({
-        status: "success",
-        data: result,
-        message: `Swapped ${result.inputAmount} ${fromToken} for ${result.outputAmount} ${toToken}`,
-      });
-    } else {
-      res.status(400).json({
-        status: "error",
-        message: "Swap failed",
-        error: result.error,
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      status: "error",
-      message: "Internal server error",
-      error: error.message,
-    });
-  }
-});
+```
+(x + Δx) × (y - Δy) = x × y
 ```
 
-### React Component
+Where:
 
-```javascript
-import { swapAlgaeToKsh, swapKshToAlgae } from "./scripts/swapTokens.js";
+- `x` = Current pool balance of input token
+- `y` = Current pool balance of output token
+- `Δx` = Input amount (after 0.3% fee)
+- `Δy` = Output amount (calculated)
 
-function SwapComponent() {
-  const [amount, setAmount] = useState("");
-  const [direction, setDirection] = useState("ALGAE_TO_KSH");
-  const [result, setResult] = useState(null);
+**Example:**
 
-  const handleSwap = async () => {
-    try {
-      let swapResult;
-
-      if (direction === "ALGAE_TO_KSH") {
-        swapResult = await swapAlgaeToKsh(
-          userAccountId,
-          userPrivateKey,
-          parseInt(amount)
-        );
-      } else {
-        swapResult = await swapKshToAlgae(
-          userAccountId,
-          userPrivateKey,
-          parseInt(amount)
-        );
-      }
-
-      setResult(swapResult);
-    } catch (error) {
-      console.error("Swap failed:", error);
-    }
-  };
-
-  return (
-    <div>
-      <input
-        type="number"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-        placeholder="Amount to swap"
-      />
-      <select value={direction} onChange={(e) => setDirection(e.target.value)}>
-        <option value="ALGAE_TO_KSH">ALGAE → KSH</option>
-        <option value="KSH_TO_ALGAE">KSH → ALGAE</option>
-      </select>
-      <button onClick={handleSwap}>Swap Tokens</button>
-
-      {result && (
-        <div>
-          <p>
-            Swapped: {result.inputAmount} → {result.outputAmount}
-          </p>
-          <p>Transaction: {result.transactionId}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-```
-
-### Batch Processing
-
-```javascript
-import { processBatchSwaps } from "./examples/swapUsageExample.js";
-
-const swapRequests = [
-  {
-    userId: "user1",
-    fromToken: "ALGAE",
-    toToken: "KSH",
-    userAccountId: "0.0.1111111",
-    userPrivateKey: "key1",
-    amount: 100,
-  },
-  {
-    userId: "user2",
-    fromToken: "KSH",
-    toToken: "ALGAE",
-    userAccountId: "0.0.2222222",
-    userPrivateKey: "key2",
-    amount: 50,
-  },
-];
-
-const results = await processBatchSwaps(swapRequests);
-console.log(results);
-```
+- Pool has 1,000,000 ALGAE and 1,000,000 KSH
+- User swaps 1,000 ALGAE
+- After 0.3% fee: 997 ALGAE goes to pool
+- Output: (1,000,000 × 997) ÷ (1,000,000 + 997) = 996 KSH
 
 ## 🧪 Testing
 
-Run the test suite:
+### Test Real Swaps (ACTUAL TRANSFERS)
 
 ```bash
-# Test all swap functions
-node scripts/testSwaps.js
-
-# Test usage examples
-node examples/swapUsageExample.js
+# Test with real token transfers
+node scripts/testRealSwaps.js
 ```
 
-## ⚠️ Current Implementation
+This will:
 
-**Note:** The current implementation uses **simulation mode** for demos and testing. The swaps return realistic results but don't execute real blockchain transactions.
+- ✅ Actually transfer tokens between accounts
+- ✅ Show real exchange rates based on pool balances
+- ✅ Display before/after balances
+- ✅ Update pool reserves
+- ✅ Be visible on HashScan
 
-### For Production:
+### Test Simulation Functions
 
-1. **Replace simulation with real DEX integration**
-2. **Add proper liquidity pools**
-3. **Implement real token transfers**
-4. **Add slippage protection**
-5. **Include transaction fees**
+```bash
+# Test simulation functions (no real transfers)
+node scripts/testSwaps.js
+```
 
-The TODO comments in the code show where to implement real DEX functionality.
+## 📋 Prerequisites
+
+Before using the real swap functions:
+
+1. **Environment Variables** in `.env`:
+
+   ```bash
+   ACCOUNT_ID=0.0.1234567           # Main pool account
+   PRIVATE_KEY=302e020100300506...   # Pool account private key
+   ALGAE_TOKEN_ID=0.0.1234568       # ALGAE token ID
+   KSH_TOKEN_ID=0.0.1234569         # KSH token ID
+   ```
+
+2. **Token Associations**:
+
+   - Pool account must be associated with both tokens
+   - User account must be associated with both tokens
+
+3. **Sufficient Balances**:
+
+   - Pool account should have large reserves (e.g., 1B tokens each)
+   - User account needs enough tokens for the swap
+
+4. **Network**: Currently configured for Hedera Testnet
 
 ## 🔐 Security Notes
 
-- **Never expose private keys** in client-side code
-- **Validate all inputs** before processing swaps
-- **Use environment variables** for sensitive data
-- **Implement rate limiting** for swap endpoints
-- **Add balance checks** before swapping
+- **Private Keys**: Never expose private keys in client-side code
+- **Validation**: Always validate inputs before processing swaps
+- **Balance Checks**: System automatically checks balances before swapping
+- **Error Handling**: Comprehensive error messages for debugging
+- **Rate Limiting**: Consider implementing rate limiting for production
 
-## 🛠️ Environment Setup
+## 🔗 HashScan Integration
 
-Make sure your `.env` file contains:
+After each swap, you can verify the transfers on HashScan:
 
-```bash
-ALGAE_TOKEN_ID=0.0.1234567
-KSH_TOKEN_ID=0.0.1234568
-ACCOUNT_ID=0.0.1234569
-PRIVATE_KEY=302e020100300506032b65700422042...
+```javascript
+// View user account transactions
+https://hashscan.io/testnet/account/${userAccountId}
+
+// View pool account transactions
+https://hashscan.io/testnet/account/${process.env.ACCOUNT_ID}
+
+// View specific token transfers
+https://hashscan.io/testnet/token/${process.env.ALGAE_TOKEN_ID}
 ```
 
-## 📈 Exchange Rates
+## ⚠️ Production Considerations
 
-Current simulation rates:
+For production deployment:
 
-- **ALGAE → KSH:** 1% fee (99 KSH per 100 ALGAE)
-- **KSH → ALGAE:** 1.02x rate (102 ALGAE per 100 KSH)
+1. **Mainnet Configuration**: Switch from testnet to mainnet
+2. **Private Key Security**: Use secure key management
+3. **Pool Management**: Monitor pool balances and reserves
+4. **Fee Adjustment**: Adjust the 0.3% fee as needed
+5. **Slippage Protection**: Add minimum output amount checks
+6. **Rate Limiting**: Implement user swap limits
+7. **Monitoring**: Set up alerts for large swaps or low liquidity
 
-These can be adjusted in the `directSwap` functions in each module.
+## 📈 Pool Management
+
+The liquidity pool balances will change over time:
+
+```javascript
+// Monitor pool balances
+import { getTokenBalance } from "./scripts/swapAlgaeKsh.js";
+
+const poolAlgae = await getTokenBalance(client, poolAccountId, algaeTokenId);
+const poolKsh = await getTokenBalance(client, poolAccountId, kshTokenId);
+
+console.log(`Pool reserves: ${poolAlgae} ALGAE, ${poolKsh} KSH`);
+```
 
 ## 🤝 Contributing
 
-When adding new swap functionality:
+When adding new functionality:
 
-1. Add the new function to `scripts/swapTokens.js`
-2. Export it in the unified module
-3. Add tests to `scripts/testSwaps.js`
+1. Add the new function to the appropriate swap file
+2. Export it in `scripts/swapTokens.js`
+3. Add tests to `scripts/testRealSwaps.js`
 4. Update this documentation
-5. Add usage examples
+5. Test with real transfers on testnet first
 
 ## 📞 Support
 
-For questions or issues with the swap functions, please check:
+For questions or issues:
 
-1. The test files for working examples
-2. The usage examples for integration patterns
-3. The TODO comments for production implementation guidance
+1. Check `scripts/testRealSwaps.js` for working examples
+2. Verify your `.env` configuration
+3. Ensure accounts are associated with tokens
+4. Check HashScan for transaction details
+5. Review error messages for specific issues
+
+---
+
+**Remember**: These functions perform real token transfers. Always test thoroughly on testnet before using on mainnet!

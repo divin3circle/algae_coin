@@ -10,6 +10,8 @@ import {
   ContractId,
   ContractCallQuery,
   ContractFunctionParameters,
+  TransferTransaction,
+  AccountBalanceQuery,
 } from "@hashgraph/sdk";
 import * as ethers from "ethers";
 import "dotenv/config";
@@ -33,133 +35,261 @@ function hexToUint8Array(hexString) {
   return bytes;
 }
 
-// Helper function to create SaucerSwap path (token + fee + token)
-function createSwapPath(tokenA, tokenB, fee = 500) {
-  // Remove 0x prefix and ensure 40 characters
-  const cleanTokenA = tokenA.replace("0x", "").padStart(40, "0");
-  const cleanTokenB = tokenB.replace("0x", "").padStart(40, "0");
+/**
+ * Get token balance for a specific account
+ * @param {Client} client - Hedera client instance
+ * @param {string} accountId - Account ID to check balance for
+ * @param {string} tokenId - Token ID to check balance of
+ * @returns {Promise<number>} Token balance
+ */
+async function getTokenBalance(client, accountId, tokenId) {
+  try {
+    const balanceQuery = new AccountBalanceQuery().setAccountId(accountId);
+    const balance = await balanceQuery.execute(client);
 
-  // Convert fee to 3-byte hex (500 = 0x0001f4)
-  const feeHex = fee.toString(16).padStart(6, "0");
-
-  // Combine: tokenA (20 bytes) + fee (3 bytes) + tokenB (20 bytes)
-  return "0x" + cleanTokenA + feeHex + cleanTokenB;
+    const tokenBalance = balance.tokens.get(tokenId);
+    return tokenBalance ? tokenBalance.toNumber() : 0;
+  } catch (error) {
+    console.error(`Error getting balance for token ${tokenId}:`, error);
+    return 0;
+  }
 }
 
-const ROUTER_CONTRACT_ID = "0.0.1414040";
-
-// Minimal ABI for exactInput function
-const swapRouterABI = [
-  {
-    inputs: [
-      {
-        components: [
-          { internalType: "bytes", name: "path", type: "bytes" },
-          { internalType: "address", name: "recipient", type: "address" },
-          { internalType: "uint256", name: "deadline", type: "uint256" },
-          { internalType: "uint256", name: "amountIn", type: "uint256" },
-          {
-            internalType: "uint256",
-            name: "amountOutMinimum",
-            type: "uint256",
-          },
-        ],
-        internalType: "struct ISwapRouter.ExactInputParams",
-        name: "params",
-        type: "tuple",
-      },
-    ],
-    name: "exactInput",
-    outputs: [{ internalType: "uint256", name: "amountOut", type: "uint256" }],
-    stateMutability: "payable",
-    type: "function",
-  },
-];
-
 /**
- * Swaps an exact amount of input tokens for as many output tokens as possible (SaucerSwap V3 style)
+ * Transfer tokens between accounts
  * @param {Client} client - Hedera client instance
- * @param {string} routerContractId - Router contract ID
- * @param {number} amountIn - Amount of input tokens to swap (in smallest unit)
- * @param {number} amountOutMin - Minimum amount of output tokens to receive (in smallest unit)
- * @param {string} tokenA - EVM address of input token
- * @param {string} tokenB - EVM address of output token
- * @param {string} recipientAddress - Destination address for the output tokens
- * @param {number} deadline - Unix timestamp after which the transaction will revert
- * @param {number} fee - Pool fee (default 500 = 0.05%)
- * @param {number} gasLim - Gas limit for the transaction
- * @returns {Object} Swap result with amount and transaction ID
+ * @param {string} fromAccountId - Sender account ID
+ * @param {PrivateKey} fromPrivateKey - Sender private key
+ * @param {string} toAccountId - Recipient account ID
+ * @param {string} tokenId - Token ID to transfer
+ * @param {number} amount - Amount to transfer
+ * @returns {Promise<Object>} Transfer receipt
  */
-async function exactInputSwap(
+async function transferTokens(
   client,
-  routerContractId,
-  amountIn,
-  amountOutMin,
-  tokenA,
-  tokenB,
-  recipientAddress,
-  deadline,
-  fee = 500,
-  gasLim = 1_000_000
+  fromAccountId,
+  fromPrivateKey,
+  toAccountId,
+  tokenId,
+  amount
 ) {
   try {
-    console.log(`Swapping ${amountIn} tokens from ${tokenA} to ${tokenB}...`);
+    console.log(
+      `Transferring ${amount} of token ${tokenId} from ${fromAccountId} to ${toAccountId}...`
+    );
 
-    // Create the path bytes
-    const path = createSwapPath(tokenA, tokenB, fee);
-    console.log("Swap path:", path);
+    const transferTx = new TransferTransaction()
+      .addTokenTransfer(tokenId, fromAccountId, -amount)
+      .addTokenTransfer(tokenId, toAccountId, amount);
 
-    // Create ABI interface
-    const abiInterface = new ethers.Interface(swapRouterABI);
+    const signedTx = await transferTx.freezeWith(client).sign(fromPrivateKey);
+    const response = await signedTx.execute(client);
+    const receipt = await response.getReceipt(client);
 
-    // ExactInputParams struct
-    const params = {
-      path: path,
-      recipient: recipientAddress,
-      deadline: deadline,
-      amountIn: amountIn,
-      amountOutMinimum: amountOutMin,
-    };
+    console.log(`Transfer status: ${receipt.status}`);
+    return receipt;
+  } catch (error) {
+    console.error("Error transferring tokens:", error);
+    throw error;
+  }
+}
 
-    console.log("Swap parameters:", params);
+/**
+ * Calculate exchange rate based on pool reserves using constant product formula
+ * @param {number} inputAmount - Amount of input tokens
+ * @param {number} inputReserve - Pool reserve of input token
+ * @param {number} outputReserve - Pool reserve of output token
+ * @param {number} feePercent - Fee percentage (default 0.3%)
+ * @returns {number} Amount of output tokens
+ */
+function calculateSwapOutput(
+  inputAmount,
+  inputReserve,
+  outputReserve,
+  feePercent = 0.3
+) {
+  // Apply fee to input amount
+  const inputAmountWithFee = (inputAmount * (100 - feePercent)) / 100;
 
-    // Encode the function data
-    const encodedData = abiInterface.encodeFunctionData("exactInput", [params]);
-    console.log("Encoded data:", encodedData);
+  // Constant product formula: (x + Δx) * (y - Δy) = x * y
+  // Solving for Δy: Δy = (y * Δx) / (x + Δx)
+  const outputAmount =
+    (outputReserve * inputAmountWithFee) / (inputReserve + inputAmountWithFee);
 
-    // Convert to Uint8Array
-    const encodedDataAsUint8Array = hexToUint8Array(encodedData);
+  return Math.floor(outputAmount);
+}
 
-    console.log("Executing exactInput transaction...");
-    const routerContractID = ContractId.fromString(routerContractId);
-    const response = await new ContractExecuteTransaction()
-      .setContractId(routerContractID)
-      .setGas(gasLim)
-      .setFunctionParameters(encodedDataAsUint8Array)
-      .execute(client);
+/**
+ * Real swap implementation using main account as liquidity pool
+ * @param {Client} client - Hedera client instance
+ * @param {string} userAccountId - User's account ID
+ * @param {PrivateKey} userPrivateKey - User's private key
+ * @param {number} amount - Amount of ALGAE tokens to swap
+ * @returns {Promise<Object>} Swap result
+ */
+async function realSwapAlgaeForKsh(
+  client,
+  userAccountId,
+  userPrivateKey,
+  amount
+) {
+  const mainAccountId = process.env.ACCOUNT_ID;
+  const mainPrivateKey = PrivateKey.fromStringDer(process.env.PRIVATE_KEY);
+  const algaeTokenId = process.env.ALGAE_TOKEN_ID;
+  const kshTokenId = process.env.KSH_TOKEN_ID;
 
-    console.log("Transaction submitted. Fetching record...");
-    const record = await response.getRecord(client);
-    const result = record.contractFunctionResult;
+  try {
+    console.log("=== REAL SWAP: ALGAE → KSH ===");
+    console.log(`User: ${userAccountId}`);
+    console.log(`Amount: ${amount} ALGAE`);
 
-    if (!result) {
-      throw new Error("Contract execution failed: No result returned");
+    // Step 1: Check user's ALGAE balance
+    const userAlgaeBalance = await getTokenBalance(
+      client,
+      userAccountId,
+      algaeTokenId
+    );
+    console.log(`User ALGAE balance: ${userAlgaeBalance}`);
+
+    if (userAlgaeBalance < amount) {
+      throw new Error(
+        `Insufficient ALGAE balance. User has ${userAlgaeBalance}, needs ${amount}`
+      );
     }
 
-    const values = result.getResult(["uint256"]);
-    const amountOut = values[0]; // uint256 amountOut
+    // Step 2: Get current pool balances before swap
+    const poolAlgaeBalance = await getTokenBalance(
+      client,
+      mainAccountId,
+      algaeTokenId
+    );
+    const poolKshBalance = await getTokenBalance(
+      client,
+      mainAccountId,
+      kshTokenId
+    );
 
-    console.log("Swap executed successfully:");
-    console.log(`- Input Amount: ${amountIn.toString()}`);
-    console.log(`- Output Amount: ${amountOut.toString()}`);
+    console.log(`Pool ALGAE balance: ${poolAlgaeBalance}`);
+    console.log(`Pool KSH balance: ${poolKshBalance}`);
+
+    // Step 3: Calculate expected KSH output
+    const expectedKshOutput = calculateSwapOutput(
+      amount,
+      poolAlgaeBalance,
+      poolKshBalance
+    );
+    console.log(`Expected KSH output: ${expectedKshOutput}`);
+
+    if (expectedKshOutput <= 0) {
+      throw new Error("Insufficient liquidity for this swap");
+    }
+
+    if (poolKshBalance < expectedKshOutput) {
+      throw new Error(
+        `Insufficient KSH in pool. Pool has ${poolKshBalance}, needs ${expectedKshOutput}`
+      );
+    }
+
+    // Step 4: Transfer ALGAE from user to pool
+    console.log("Transferring ALGAE from user to pool...");
+    await transferTokens(
+      client,
+      userAccountId,
+      userPrivateKey,
+      mainAccountId,
+      algaeTokenId,
+      amount
+    );
+
+    // Step 5: Transfer KSH from pool to user
+    console.log("Transferring KSH from pool to user...");
+    await transferTokens(
+      client,
+      mainAccountId,
+      mainPrivateKey,
+      userAccountId,
+      kshTokenId,
+      expectedKshOutput
+    );
+
+    // Step 6: Verify final balances
+    const finalUserAlgaeBalance = await getTokenBalance(
+      client,
+      userAccountId,
+      algaeTokenId
+    );
+    const finalUserKshBalance = await getTokenBalance(
+      client,
+      userAccountId,
+      kshTokenId
+    );
+    const finalPoolAlgaeBalance = await getTokenBalance(
+      client,
+      mainAccountId,
+      algaeTokenId
+    );
+    const finalPoolKshBalance = await getTokenBalance(
+      client,
+      mainAccountId,
+      kshTokenId
+    );
+
+    console.log("=== SWAP COMPLETED ===");
+    console.log(
+      `User ALGAE: ${userAlgaeBalance} → ${finalUserAlgaeBalance} (${
+        finalUserAlgaeBalance - userAlgaeBalance
+      })`
+    );
+    console.log(
+      `User KSH: ${
+        finalUserKshBalance - expectedKshOutput
+      } → ${finalUserKshBalance} (+${expectedKshOutput})`
+    );
+    console.log(
+      `Pool ALGAE: ${poolAlgaeBalance} → ${finalPoolAlgaeBalance} (+${amount})`
+    );
+    console.log(
+      `Pool KSH: ${poolKshBalance} → ${finalPoolKshBalance} (-${expectedKshOutput})`
+    );
 
     return {
-      inputAmount: amountIn.toString(),
-      outputAmount: amountOut.toString(),
-      transactionId: record.transactionId.toString(),
+      inputAmount: amount.toString(),
+      outputAmount: expectedKshOutput.toString(),
+      transactionId: `algae-ksh-swap-${Date.now()}`,
+      success: true,
+      exchangeRate: (expectedKshOutput / amount).toFixed(6),
+      poolBalances: {
+        algae: finalPoolAlgaeBalance,
+        ksh: finalPoolKshBalance,
+      },
     };
   } catch (error) {
-    console.error("Error swapping tokens:", error);
+    console.error("Error in real swap:", error);
+    throw error;
+  }
+}
+
+// Real swap implementation using your pool contract
+async function directSwap(
+  client,
+  fromTokenId,
+  toTokenId,
+  amount,
+  userAccountId,
+  userPrivateKey
+) {
+  try {
+    console.log(`Performing real swap of ${amount} tokens...`);
+
+    // Use the real swap implementation
+    return await realSwapAlgaeForKsh(
+      client,
+      userAccountId,
+      userPrivateKey,
+      amount
+    );
+  } catch (error) {
+    console.error("Error in swap:", error);
     throw error;
   }
 }
@@ -235,69 +365,6 @@ async function approveAllowance(
   }
 }
 
-// Real swap implementation using your pool contract
-async function directSwap(
-  client,
-  fromTokenId,
-  toTokenId,
-  amount,
-  userAccountId,
-  userPrivateKey
-) {
-  try {
-    console.log(`Performing real swap of ${amount} tokens...`);
-
-    // TODO: Implement real swap logic
-    // 1. Check your pool contract from createPool.js
-    // 2. Calculate exchange rate based on pool reserves
-    // 3. Execute actual token transfers
-
-    // For now, return simulation but you can implement:
-    /*
-    const poolContract = ContractId.fromString("YOUR_POOL_CONTRACT_ID");
-    
-    // Get current reserves from your pool
-    const reserveQuery = new ContractCallQuery()
-      .setContractId(poolContract)
-      .setGas(100000)
-      .setFunction("getReserves");
-    
-    const reserveResult = await reserveQuery.execute(client);
-    const [reserve0, reserve1] = reserveResult.getResult(["uint256", "uint256"]);
-    
-    // Calculate output using constant product formula: x * y = k
-    const outputAmount = calculateSwapOutput(amount, reserve0, reserve1);
-    
-    // Execute swap transaction
-    const swapTx = new ContractExecuteTransaction()
-      .setContractId(poolContract)
-      .setGas(300000)
-      .setFunction("swap", new ContractFunctionParameters()
-        .addUint256(amount)
-        .addUint256(1) // min output
-        .addAddress(userAccountId.toSolidityAddress())
-      );
-    
-    const response = await swapTx.execute(client);
-    const receipt = await response.getReceipt(client);
-    */
-
-    // Calculate output with 1% fee (you can adjust this)
-    const outputAmount = Math.floor(amount * 0.99);
-
-    console.log("✅ Swap completed successfully!");
-    return {
-      inputAmount: amount.toString(),
-      outputAmount: outputAmount.toString(),
-      transactionId: "real-swap-" + Date.now(),
-      success: true,
-    };
-  } catch (error) {
-    console.error("Error in swap:", error);
-    throw error;
-  }
-}
-
 export default async function swapAlgaeForKsh(
   userAccountId,
   userPrivateKey,
@@ -311,17 +378,15 @@ export default async function swapAlgaeForKsh(
     client = Client.forTestnet();
     client.setOperator(hederaAccountId, hederaPrivateKey);
 
-    console.log("=== DIRECT SWAP MODE ===");
-    console.log("Using simple direct swap instead of SaucerSwap pools");
+    console.log("=== REAL TOKEN SWAP MODE ===");
+    console.log("Using main account as liquidity pool");
 
-    // Use direct swap for now
-    const swapResult = await directSwap(
+    // Use real swap implementation
+    const swapResult = await realSwapAlgaeForKsh(
       client,
-      process.env.ALGAE_TOKEN_ID,
-      process.env.KSH_TOKEN_ID,
-      amount,
       userAccountId,
-      userPrivateKey
+      hederaPrivateKey,
+      amount
     );
 
     console.log("Swap result:", swapResult);
@@ -329,8 +394,19 @@ export default async function swapAlgaeForKsh(
   } catch (error) {
     console.log("Error:", error.message);
     return { success: false, error: error.message };
+  } finally {
+    if (client) {
+      client.close();
+    }
   }
 }
 
-// Export the direct swap function as well for flexibility
-export { directSwap };
+// Export the real swap function and utilities
+export {
+  realSwapAlgaeForKsh,
+  transferTokens,
+  getTokenBalance,
+  calculateSwapOutput,
+  associateTokenToAccount,
+  approveAllowance,
+};
